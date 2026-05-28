@@ -4,13 +4,15 @@ Query HuggingFace parquet files directly via DuckDB — no local download.
 Fetches the list of parquet URLs from the HF datasets-server API, then
 runs a regex filter on each file over HTTP, writing matches to a CSV.
 
+Looks for HF_TOKEN in .env files (checks script dir, repo root, and
+~/Documents/repos/opm/.env) to authenticate and avoid rate limits.
+
 Output: results/direct_hire_matches.csv
 """
 
 import csv
 import os
 import re
-import sys
 import urllib.request
 import json
 import duckdb
@@ -33,6 +35,25 @@ FROM read_parquet(?)
 WHERE regexp_matches(text, ?)
   AND NOT regexp_matches(text, ?)
 """
+
+
+def load_hf_token():
+    """Find HF_TOKEN from .env files or environment."""
+    if os.environ.get("HF_TOKEN"):
+        return os.environ["HF_TOKEN"]
+    candidates = [
+        os.path.join(os.path.dirname(__file__), "..", ".env"),
+        os.path.expanduser("~/Documents/repos/opm/.env"),
+    ]
+    for path in candidates:
+        path = os.path.normpath(path)
+        if os.path.exists(path):
+            with open(path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("HF_TOKEN="):
+                        return line.split("=", 1)[1].strip()
+    return None
 
 
 def get_parquet_files():
@@ -60,6 +81,13 @@ def main():
     print(f"Found {len(splits)} monthly splits across {sum(len(v) for v in splits.values())} parquet files")
 
     con = duckdb.connect()
+    con.execute("INSTALL httpfs; LOAD httpfs;")
+    token = load_hf_token()
+    if token:
+        con.execute("CREATE SECRET hf (TYPE HUGGINGFACE, TOKEN ?)", [token])
+        print("HuggingFace token loaded.")
+    else:
+        print("No HF_TOKEN found — proceeding unauthenticated (may hit rate limits).")
 
     fieldnames = ["usajobsControlNumber", "title", "split", "matched_phrase", "context"]
     total_seen = 0
