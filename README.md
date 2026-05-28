@@ -16,8 +16,9 @@ python scripts/find_direct_hire.py
 cd analysis && quarto render direct_hire_analysis.qmd
 ```
 
-The script streams data without downloading the full 32GB dataset locally.
-Results are written incrementally to `results/direct_hire_matches.csv`.
+The script queries parquet files directly over HTTP via DuckDB — no local
+download. Only matching rows are transferred. Results are written
+incrementally to `results/direct_hire_matches.csv`.
 
 ## Regex patterns
 

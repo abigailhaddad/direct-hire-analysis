@@ -1,101 +1,93 @@
 #!/usr/bin/env python3
 """
-Stream the loyoladatamining/usajobs HuggingFace dataset month by month,
-find direct hire authority mentions, and write matches to a CSV.
+Query HuggingFace parquet files directly via DuckDB — no local download.
+Fetches the list of parquet URLs from the HF datasets-server API, then
+runs a regex filter on each file over HTTP, writing matches to a CSV.
 
-Runs without downloading the full dataset locally (streaming=True).
 Output: results/direct_hire_matches.csv
 """
 
-import re
 import csv
 import os
+import re
 import sys
-from datasets import load_dataset, get_dataset_split_names
+import urllib.request
+import json
+import duckdb
 
-PATTERNS = [
-    r'direct[\s-]*hire\s*(?:authority|appointment)?',
-    r'direct[\s-]*hiring\s*(?:authority|appointment)?',
-    r'Direct[\s-]*Hire[\s-]*Authority',
-    r'OPM[\s-]*Direct[\s-]*Hire',
-]
-COMBINED = re.compile('|'.join(f'(?:{p})' for p in PATTERNS), re.IGNORECASE)
-MILITARY_DHA = re.compile(r'Military Treatment Facilities under DHA', re.IGNORECASE)
+HF_PARQUET_API = "https://datasets-server.huggingface.co/parquet?dataset=loyoladatamining/usajobs"
+
+DIRECT_HIRE_RE = r"(?i)direct[\s-]*hir(?:e|ing)\s*(?:authority|appointment)?"
+EXCLUDE_RE = r"(?i)Military Treatment Facilities under DHA"
+
+QUERY = """
+SELECT
+    usajobsControlNumber,
+    title,
+    regexp_extract(text, '(?i)direct[\\s-]*hir(?:e|ing)(?:\\s*(?:authority|appointment))?') AS matched_phrase,
+    regexp_extract(
+        text,
+        '.{0,100}direct[\\s-]*hir(?:e|ing)(?:\\s*(?:authority|appointment))?.{0,100}'
+    ) AS context
+FROM read_parquet(?)
+WHERE regexp_matches(text, ?)
+  AND NOT regexp_matches(text, ?)
+"""
 
 
-def extract_match(text, control_number, title, split_name):
-    """Return one dict per job if a direct hire mention is found, else None."""
-    if not text:
-        return None
-    for match in COMBINED.finditer(text):
-        window = text[max(0, match.start() - 200): match.end() + 200]
-        if MILITARY_DHA.search(window):
-            continue
-        start = max(0, match.start() - 100)
-        end = min(len(text), match.end() + 100)
-        context = re.sub(r'\s+', ' ', text[start:end]).strip()
-        return {
-            'usajobsControlNumber': control_number,
-            'title': title,
-            'split': split_name,
-            'matched_phrase': match.group(),
-            'context': context,
-        }
-    return None
+def get_parquet_files():
+    req = urllib.request.Request(HF_PARQUET_API, headers={"User-Agent": "direct-hire-analysis/1.0"})
+    with urllib.request.urlopen(req) as resp:
+        data = json.load(resp)
+    files = data.get("parquet_files", [])
+    # group by split, keep only monthly splits
+    by_split = {}
+    for f in files:
+        split = f["split"]
+        if re.match(r"^\d{4}_\d{2}$", split):
+            by_split.setdefault(split, []).append(f["url"])
+    return dict(sorted(by_split.items()))
 
 
 def main():
-    output_path = os.path.join(os.path.dirname(__file__), '..', 'results', 'direct_hire_matches.csv')
-    output_path = os.path.normpath(output_path)
+    output_path = os.path.normpath(
+        os.path.join(os.path.dirname(__file__), "..", "results", "direct_hire_matches.csv")
+    )
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
 
-    print("Fetching available splits...")
-    all_splits = get_dataset_split_names("loyoladatamining/usajobs", "postings")
-    monthly_splits = sorted(s for s in all_splits if re.match(r'^\d{4}_\d{2}$', s))
-    print(f"Found {len(monthly_splits)} monthly splits: {monthly_splits[0]} → {monthly_splits[-1]}")
+    print("Fetching parquet file list from HuggingFace...")
+    splits = get_parquet_files()
+    print(f"Found {len(splits)} monthly splits across {sum(len(v) for v in splits.values())} parquet files")
 
-    fieldnames = ['usajobsControlNumber', 'title', 'split', 'matched_phrase', 'context']
+    con = duckdb.connect()
 
-    with open(output_path, 'w', newline='', encoding='utf-8') as f:
+    fieldnames = ["usajobsControlNumber", "title", "split", "matched_phrase", "context"]
+    total_seen = 0
+    total_matched = 0
+
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
 
-        total_seen = 0
-        total_matched = 0
-
-        for split in monthly_splits:
-            split_seen = 0
+        for split, urls in splits.items():
             split_matched = 0
-            print(f"  {split} ... ", end='', flush=True)
-
-            ds = load_dataset(
-                "loyoladatamining/usajobs",
-                "postings",
-                split=split,
-                streaming=True,
-            )
-
-            for record in ds:
-                split_seen += 1
-                result = extract_match(
-                    record['text'],
-                    record['usajobsControlNumber'],
-                    record['title'],
-                    split,
-                )
-                if result:
-                    writer.writerow(result)
+            for url in urls:
+                rows = con.execute(QUERY, [url, DIRECT_HIRE_RE, EXCLUDE_RE]).fetchall()
+                for row in rows:
+                    writer.writerow({
+                        "usajobsControlNumber": row[0],
+                        "title": row[1],
+                        "split": split,
+                        "matched_phrase": row[2],
+                        "context": re.sub(r"\s+", " ", row[3]).strip() if row[3] else "",
+                    })
                     split_matched += 1
-
             f.flush()
-            total_seen += split_seen
             total_matched += split_matched
-            pct = 100 * split_matched / split_seen if split_seen else 0
-            print(f"{split_matched:,} / {split_seen:,} ({pct:.1f}%)")
+            print(f"  {split}: {split_matched:,} matches", flush=True)
 
-    print(f"\nDone. {total_matched:,} direct hire postings out of {total_seen:,} total ({100*total_matched/total_seen:.1f}%)")
-    print(f"Results written to: {output_path}")
+    print(f"\nDone. {total_matched:,} direct hire postings written to {output_path}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
