@@ -1,0 +1,136 @@
+---
+title: "Direct Hire Authority in Federal Job Postings"
+author: "Abigail Haddad"
+date: today
+format:
+  html:
+    theme: cosmo
+    toc: true
+    toc-depth: 2
+    toc-location: right
+    code-fold: true
+    code-tools: true
+    fig-width: 12
+    fig-height: 6
+    self-contained: true
+execute:
+  echo: true
+  warning: false
+jupyter: python3
+---
+
+Analysis of Direct Hire Authority usage across ~3 million federal job postings
+(January 2017 – March 2026), sourced from the
+[loyoladatamining/usajobs](https://huggingface.co/datasets/loyoladatamining/usajobs)
+HuggingFace dataset. Run `scripts/find_direct_hire.py` first to generate the
+input data.
+
+```{python}
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import re
+from collections import Counter
+from great_tables import GT, md
+
+RESULTS_PATH = "../results/direct_hire_matches.csv"
+
+df = pd.read_csv(RESULTS_PATH)
+df['year'] = df['split'].str[:4].astype(int)
+df['month'] = df['split'].str[5:].astype(int)
+df['date'] = pd.to_datetime(df['split'].str.replace('_', '-') + '-01')
+df['matched_phrase_lower'] = df['matched_phrase'].str.lower().str.strip()
+
+print(f"Total direct hire postings: {len(df):,}")
+print(f"Date range: {df['split'].min()} → {df['split'].max()}")
+print(f"Unique job titles: {df['title'].nunique():,}")
+```
+
+## Overall Stats
+
+```{python}
+# We need total postings per split to compute rates — read from a summary file if present,
+# otherwise just show raw counts.
+summary = pd.DataFrame({
+    'Metric': [
+        'Direct hire postings found',
+        'Date range',
+        'Unique job titles',
+        'Unique control numbers',
+    ],
+    'Value': [
+        f"{len(df):,}",
+        f"{df['split'].min()} → {df['split'].max()}",
+        f"{df['title'].nunique():,}",
+        f"{df['usajobsControlNumber'].nunique():,}",
+    ]
+})
+
+GT(summary).tab_header(
+    title="Direct Hire Authority: Summary",
+    subtitle="loyoladatamining/usajobs HuggingFace dataset"
+).tab_options(quarto_disable_processing=True).show()
+```
+
+## Phrase Variations
+
+What exact language appears in the postings?
+
+```{python}
+phrase_counts = df['matched_phrase_lower'].value_counts().reset_index()
+phrase_counts.columns = ['Phrase', 'Count']
+phrase_counts['Pct'] = (phrase_counts['Count'] / len(df) * 100).round(1).astype(str) + '%'
+
+GT(phrase_counts.head(30)).tab_header(
+    title="Direct Hire Phrase Variations",
+    subtitle="Top 30 matched phrases (case-normalized)"
+).cols_align('left', columns=['Phrase']).tab_options(quarto_disable_processing=True).show()
+```
+
+## Trend Over Time
+
+```{python}
+monthly = df.groupby('date').size().reset_index(name='count')
+
+fig, ax = plt.subplots(figsize=(13, 5))
+ax.bar(monthly['date'], monthly['count'], width=20, color='steelblue', alpha=0.8)
+ax.set_title('Direct Hire Postings by Month', fontsize=14)
+ax.set_xlabel('Month')
+ax.set_ylabel('Postings')
+ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+yearly = df.groupby('year').size().reset_index(name='Direct Hire Postings')
+yearly.columns = ['Year', 'Direct Hire Postings']
+
+GT(yearly).tab_header(
+    title="Direct Hire Postings by Year"
+).tab_options(quarto_disable_processing=True).show()
+```
+
+## Top Job Titles
+
+```{python}
+title_counts = df['title'].value_counts().reset_index()
+title_counts.columns = ['Job Title', 'Count']
+
+GT(title_counts.head(30)).tab_header(
+    title="Top 30 Job Titles with Direct Hire Mentions"
+).cols_align('left', columns=['Job Title']).tab_options(quarto_disable_processing=True).show()
+```
+
+## Example Contexts
+
+A sample of the matched text in context.
+
+```{python}
+sample = df[['title', 'split', 'matched_phrase', 'context']].sample(min(20, len(df)), random_state=42)
+sample.columns = ['Title', 'Month', 'Matched Phrase', 'Context']
+
+GT(sample.reset_index(drop=True)).tab_header(
+    title="Sample Direct Hire Mentions in Context"
+).cols_align('left', columns=['Title', 'Context']).tab_options(quarto_disable_processing=True).show()
+```
