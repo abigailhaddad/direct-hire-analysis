@@ -34,6 +34,7 @@ from collections import Counter
 from great_tables import GT, md
 
 RESULTS_PATH = "../results/direct_hire_matches.csv"
+TOTALS_PATH = "../results/split_totals.csv"
 
 df = pd.read_csv(RESULTS_PATH)
 df['year'] = df['split'].str[:4].astype(int)
@@ -41,9 +42,15 @@ df['month'] = df['split'].str[5:].astype(int)
 df['date'] = pd.to_datetime(df['split'].str.replace('_', '-') + '-01')
 df['matched_phrase_lower'] = df['matched_phrase'].str.lower().str.strip()
 
+totals = pd.read_csv(TOTALS_PATH)
+totals['date'] = pd.to_datetime(totals['split'].str.replace('_', '-') + '-01')
+totals['year'] = totals['split'].str[:4].astype(int)
+totals['filter_rate'] = (totals['dh_candidates'] - totals['dh_matched']) / totals['dh_candidates'].clip(lower=1)
+
 print(f"Total direct hire postings: {len(df):,}")
+print(f"Total postings in dataset: {totals['total_postings'].sum():,}")
+print(f"Overall DH rate: {100*len(df)/totals['total_postings'].sum():.1f}%")
 print(f"Date range: {df['split'].min()} → {df['split'].max()}")
-print(f"Unique job titles: {df['title'].nunique():,}")
 ```
 
 ## Overall Stats
@@ -51,18 +58,24 @@ print(f"Unique job titles: {df['title'].nunique():,}")
 ```{python}
 # We need total postings per split to compute rates — read from a summary file if present,
 # otherwise just show raw counts.
+total_postings = totals['total_postings'].sum()
+filtered_out = (totals['dh_candidates'] - totals['dh_matched']).sum()
 summary = pd.DataFrame({
     'Metric': [
-        'Direct hire postings found',
+        'Total postings in dataset',
+        'Direct hire postings (genuine)',
+        'Overall DH rate',
+        'False positives filtered out',
         'Date range',
         'Unique job titles',
-        'Unique control numbers',
     ],
     'Value': [
+        f"{total_postings:,}",
         f"{len(df):,}",
+        f"{100*len(df)/total_postings:.1f}%",
+        f"{filtered_out:,} ({100*filtered_out/(filtered_out+len(df)):.1f}% of candidates)",
         f"{df['split'].min()} → {df['split'].max()}",
         f"{df['title'].nunique():,}",
-        f"{df['usajobsControlNumber'].nunique():,}",
     ]
 })
 
@@ -90,14 +103,26 @@ GT(phrase_counts.head(30)).tab_header(
 ## Trend Over Time
 
 ```{python}
-monthly = df.groupby('date').size().reset_index(name='count')
+monthly_matches = df.groupby('date').size().reset_index(name='dh_count')
+monthly = totals[['date', 'total_postings', 'dh_candidates', 'dh_matched']].merge(
+    monthly_matches, on='date', how='left'
+).fillna(0)
+monthly['dh_rate'] = 100 * monthly['dh_matched'] / monthly['total_postings'].clip(lower=1)
+monthly['filter_pct'] = 100 * (monthly['dh_candidates'] - monthly['dh_matched']) / monthly['dh_candidates'].clip(lower=1)
 
-fig, ax = plt.subplots(figsize=(13, 5))
-ax.bar(monthly['date'], monthly['count'], width=20, color='steelblue', alpha=0.8)
-ax.set_title('Direct Hire Postings by Month', fontsize=14)
-ax.set_xlabel('Month')
-ax.set_ylabel('Postings')
-ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(13, 9), sharex=True)
+
+ax1.bar(monthly['date'], monthly['dh_matched'], width=20, color='steelblue', alpha=0.8)
+ax1.set_title('Direct Hire Postings per Month (absolute count)', fontsize=13)
+ax1.set_ylabel('Postings')
+ax1.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{int(x):,}'))
+
+ax2.plot(monthly['date'], monthly['dh_rate'], color='steelblue', linewidth=1.5)
+ax2.set_title('Direct Hire as % of All Postings', fontsize=13)
+ax2.set_ylabel('% of month\'s postings')
+ax2.set_xlabel('Month')
+ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f'{x:.1f}%'))
+
 plt.tight_layout()
 plt.show()
 ```
