@@ -19,18 +19,11 @@ HF_PARQUET_API = "https://datasets-server.huggingface.co/parquet?dataset=loyolad
 # Each tool: (match_pattern, exclude_pattern_or_None)
 # Python: exclude snake/wildlife/firearms contexts
 PYTHON_EXCLUDE = r"(?i)\b(?:burmese|ball\s+python|rock\s+python|reticulated|constrictor|python\s+snake|invasive\s+snake|colt\s+python|python\s+revolver)\b"
-# R: \bR\b alone is too noisy; require "R programming" or "in R" or "R and Python" etc.
-R_MATCH = r"(?i)(?:\bR\s+programming\b|\bprogramming\s+in\s+R\b|\busing\s+R\b|\bR\s+and\s+Python\b|\bPython\s+and\s+R\b|\bR[,/]\s*Python\b|\bR\s+or\s+Python\b)"
 
 TOOLS = {
-    "python":  (r"(?i)\bpython\b",   PYTHON_EXCLUDE),
-    "stata":   (r"(?i)\bstata\b",    None),
-    "r":       (R_MATCH,             None),
-    "sas":     (r"(?i)\bSAS\b",      None),
-    "sql":     (r"(?i)\bSQL\b",      None),
-    "excel":   (r"(?i)\bexcel\b",    None),
-    "tableau": (r"(?i)\btableau\b",  None),
-    "spss":    (r"(?i)\bSPSS\b",     None),
+    "python":  (r"(?i)\bpython\b",  PYTHON_EXCLUDE),
+    "stata":   (r"(?i)\bstata\b",   None),
+    "tableau": (r"(?i)\btableau\b", None),
 }
 
 
