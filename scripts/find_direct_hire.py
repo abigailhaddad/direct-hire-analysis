@@ -68,7 +68,7 @@ def get_parquet_files():
         data = json.load(resp)
     by_split = {}
     for f in data.get("parquet_files", []):
-        split = f["split"]
+        split = f["config"]
         if re.match(r"^\d{4}_\d{2}$", split):
             by_split.setdefault(split, []).append(f["url"])
     return dict(sorted(by_split.items()))

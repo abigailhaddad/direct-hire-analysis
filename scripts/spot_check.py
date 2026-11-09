@@ -53,7 +53,7 @@ def get_parquet_url(split="2023_06"):
     with urllib.request.urlopen(req) as resp:
         data = json.load(resp)
     for f in data["parquet_files"]:
-        if f["split"] == split:
+        if f["config"] == split:
             return f["url"]
     raise ValueError(f"Split {split} not found")
 
