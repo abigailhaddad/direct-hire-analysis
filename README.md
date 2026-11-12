@@ -29,4 +29,13 @@ Direct[\s-]*Hire[\s-]*Authority
 OPM[\s-]*Direct[\s-]*Hire
 ```
 
-False positive excluded: "Military Treatment Facilities under DHA" (Defense Health Agency).
+Mentions are not counted when they sit next to Schedule A disability or 30%-disabled-veteran
+language (different authorities), or inside the probationary-period boilerplate "...from a
+competitive examination register of eligibles (an announcement opened to the public) or under a
+direct hire authority", which appears in postings that are not direct hire. A posting counts if any
+one mention survives.
+
+Fixed 2026-11-12: the boilerplate wasn't excluded before, and every posting mentioning "Military
+Treatment Facilities under DHA" (Defense Health Agency clinics) was dropped, although those
+postings are often direct hire. Results from before the fix are in
+`results/direct_hire_matches_before_2026-11-12.csv`.

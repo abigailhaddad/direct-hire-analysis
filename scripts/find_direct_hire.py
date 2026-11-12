@@ -3,9 +3,19 @@
 Query HuggingFace parquet files directly via DuckDB — no local download.
 
 Two-stage filtering:
-  1. DuckDB: fast pre-filter — any "direct hire" mention, whole-doc MTF/DHA exclusion
+  1. DuckDB: fast pre-filter — any "direct hire" mention
   2. Python: per-match context check — exclude Schedule A disability and
-     30%+ disabled vet hiring authority mentions (different authorities, not DHA)
+     30%+ disabled vet hiring authority mentions (different authorities, not DHA),
+     and the probationary-period boilerplate "...from a competitive examination
+     register of eligibles (an announcement opened to the public) or under a direct
+     hire authority", which appears in postings that are not direct hire
+
+A posting is kept if any one of its mentions survives the checks.
+
+Until 2026-11-12 the pre-filter also dropped every posting that mentioned "Military
+Treatment Facilities under DHA". That was a leftover from an earlier pattern that
+matched the bare acronym "DHA"; the current pattern doesn't, so the exclusion only
+dropped Defense Health Agency clinic postings that really are direct hire.
 
 Looks for HF_TOKEN in .env files (checks repo root and ~/Documents/repos/opm/.env).
 
@@ -22,13 +32,14 @@ import json
 import duckdb
 
 HF_PARQUET_API = "https://datasets-server.huggingface.co/parquet?dataset=loyoladatamining/usajobs"
+HF_TREE_API = "https://huggingface.co/api/datasets/loyoladatamining/usajobs/tree/main/postings"
+HF_RESOLVE = "https://huggingface.co/datasets/loyoladatamining/usajobs/resolve/main/"
 
 # Stage 1: DuckDB pre-filter (whole-document)
 CANDIDATE_QUERY = r"""
 SELECT usajobsControlNumber, title, text
 FROM read_parquet(?)
 WHERE regexp_matches(text, '(?i)direct[\s-]*hir(?:e|ing)')
-  AND NOT regexp_matches(text, '(?i)Military Treatment Facilities under DHA')
 """
 COUNT_QUERY = "SELECT COUNT(*) FROM read_parquet(?)"
 
@@ -42,6 +53,10 @@ CONTEXT_EXCLUDES = [
     (re.compile(r"Schedule\s*A", re.IGNORECASE), 20, 100),
     # 30% disabled vet authority — appears within ~60 chars, either side
     (re.compile(r"(?:disabled\s+vet.{0,50}30\s*%|30\s*%\+?.{0,50}disabled\s+vet)", re.IGNORECASE), 80, 80),
+    # Probationary-period boilerplate: "...selected for a nontemporary appointment from a competitive
+    # examination register of eligibles (an announcement opened to the public) or under a direct hire
+    # authority." "register of eligibles" sits ~70 chars before the match.
+    (re.compile(r"register\s+of\s+eligibles", re.IGNORECASE), 150, 0),
 ]
 
 
@@ -63,14 +78,22 @@ def load_hf_token():
 
 
 def get_parquet_files():
-    req = urllib.request.Request(HF_PARQUET_API, headers={"User-Agent": "direct-hire-analysis/1.0"})
+    """Monthly files straight from the dataset repo (postings/YYYY_MM-0000k-of-0000n.parquet).
+
+    Until 2026-11-12 this used the datasets-server parquet API (HF_PARQUET_API), which only lists months whose
+    automatic conversion succeeded; on 2026-11-12 the conversion had failed for 2023_04, so that month was silently
+    skipped. The repo listing doesn't depend on the conversion.
+    """
+    req = urllib.request.Request(HF_TREE_API, headers={"User-Agent": "direct-hire-analysis/1.0"})
     with urllib.request.urlopen(req) as resp:
         data = json.load(resp)
     by_split = {}
-    for f in data.get("parquet_files", []):
-        split = f["config"]
-        if re.match(r"^\d{4}_\d{2}$", split):
-            by_split.setdefault(split, []).append(f["url"])
+    for f in data:
+        m = re.match(r"^postings/(\d{4}_\d{2})-\d+-of-\d+\.parquet$", f.get("path", ""))
+        if f.get("type") == "file" and m:
+            by_split.setdefault(m.group(1), []).append(HF_RESOLVE + f["path"])
+    if not by_split:
+        raise SystemExit(f"no monthly parquet files found at {HF_TREE_API}; not overwriting results")
     return dict(sorted(by_split.items()))
 
 
